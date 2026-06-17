@@ -4,7 +4,7 @@ import plotly.graph_objects as go
 
 st.set_page_config(page_title="Customer Segmentation Dashboard", layout="wide")
 
-st.title("📊 Customer Segmentation & LTV Dashboard")
+st.title("📊 LTV Dashboard")
 
 # Load data
 @st.cache_data
@@ -19,13 +19,24 @@ df = df.sort_values("cohort_dt")
 
 st.sidebar.header("Filters")
 
-# Get unique values for filters
+# Horizon is the primary filter — pick exactly one (default 12M)
+horizon = st.sidebar.radio(
+    "LTV Horizon",
+    ["12 Months", "6 Months"],
+    index=0,
+)
+horizon_col = "12M" if horizon == "12 Months" else "6M"
+
+# Everything downstream operates on the selected-horizon slice
+df = df[df[horizon_col]].copy()
+
+# Get unique values for filters (within the chosen horizon)
 fys = sorted(df["fy"].unique())
 subscriber_types = sorted(df["subscriber_type"].unique())
 first_products = sorted(df["first_product"].unique())
 all_products = sorted(df["all_products"].unique())
 
-# FY is primary filter (comes first)
+# FY is the next filter
 selected_fy = st.sidebar.multiselect(
     "Fiscal Year",
     fys,
@@ -204,7 +215,7 @@ with col1:
             )
 
         fig_time.update_layout(
-            title=f"{metric.upper()} by Cohort (12-Month Window)",
+            title=f"{metric.upper()} by Cohort ({horizon} Window)",
             xaxis_title="Cohort Month",
             yaxis_title=metric.upper(),
             hovermode="x unified",
