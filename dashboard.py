@@ -20,23 +20,24 @@ df = df.sort_values("cohort_dt")
 st.sidebar.header("Filters")
 
 # Get unique values for filters
-months_sorted = sorted(df["cohort_month"].unique())
 fys = sorted(df["fy"].unique())
 subscriber_types = sorted(df["subscriber_type"].unique())
 first_products = sorted(df["first_product"].unique())
 all_products = sorted(df["all_products"].unique())
 
-# Create filter selections
-selected_months = st.sidebar.multiselect(
-    "Cohort Month",
-    months_sorted,
-    default=months_sorted[-6:],  # Default to last 6 cohorts
-)
-
+# FY is primary filter (comes first)
 selected_fy = st.sidebar.multiselect(
     "Fiscal Year",
     fys,
     default=fys[-1:],  # Default to latest FY
+)
+
+# Month filter depends on selected FY
+available_months = sorted(df[df["fy"].isin(selected_fy)]["cohort_month"].unique())
+selected_months = st.sidebar.multiselect(
+    "Cohort Month",
+    available_months,
+    default=available_months[-6:] if len(available_months) >= 6 else available_months,
 )
 
 selected_subscriber = st.sidebar.multiselect(
