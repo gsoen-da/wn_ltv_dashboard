@@ -146,6 +146,24 @@ def cohort_series(data, metric):
     return s.sort_index()
 
 
+# Display precision per metric: money (LTV/LTR/CM3/CAC) 0dp; averages/ratios
+# (AOV/Orders/LTV:CAC) 1dp; IPO 2dp; count integer.
+METRIC_DP = {"count": 0, "ltv": 0, "ltr": 0, "cm3": 0, "cac": 0,
+             "ltv_cac": 1, "aov": 1, "orders": 1, "ipo": 2}
+COL_DP = {"Customers": 0, "LTV": 0, "LTR": 0, "CM3": 0, "CAC": 0,
+          "LTV:CAC": 1, "AOV": 1, "Orders/Customer": 1, "IPO": 2}
+
+
+def table_config(frame):
+    """Per-column number formatting so st.dataframe shows the intended decimals."""
+    return {c: st.column_config.NumberColumn(format=f"%.{d}f")
+            for c, d in COL_DP.items() if c in frame.columns}
+
+
+def show_table(frame):
+    st.dataframe(frame, width="stretch", hide_index=True, column_config=table_config(frame))
+
+
 # Main content
 col1, col2 = st.columns([2, 1])
 
@@ -252,11 +270,12 @@ with col1:
 with col2:
     st.subheader("Quick Stats")
     if len(filtered_df) > 0:
+        dp = METRIC_DP.get(metric, 0)
         if is_per_customer:
-            st.metric("Avg", f"{scalar_metric(filtered_df, metric):,.0f}")
+            st.metric("Avg", f"{scalar_metric(filtered_df, metric):,.{dp}f}")
             if all_plot_values:
-                st.metric("Min (Plotted)", f"{min(all_plot_values):,.0f}")
-                st.metric("Max (Plotted)", f"{max(all_plot_values):,.0f}")
+                st.metric("Min (Plotted)", f"{min(all_plot_values):,.{dp}f}")
+                st.metric("Max (Plotted)", f"{max(all_plot_values):,.{dp}f}")
         else:
             st.metric("Total Customers", f"{len(filtered_df):,.0f}")
             if all_plot_values:
@@ -297,7 +316,7 @@ if len(filtered_df) > 0:
     rows = [(p, filtered_df[filtered_df[f"first_{p}"]]) for p in PRODUCTS]
     tbl = breakdown_table(rows)
     if len(tbl):
-        st.dataframe(tbl, width="stretch", hide_index=True)
+        show_table(tbl)
     else:
         st.info("No first-order product activity in this selection.")
 else:
@@ -312,7 +331,7 @@ if len(filtered_df) > 0:
     rows = [(p, filtered_df[filtered_df[f"bought_{p}"]]) for p in PRODUCTS]
     tbl = breakdown_table(rows)
     if len(tbl):
-        st.dataframe(tbl, width="stretch", hide_index=True)
+        show_table(tbl)
     else:
         st.info("No product activity in this selection.")
 else:
@@ -324,7 +343,7 @@ st.divider()
 st.subheader("Breakdown by Subscriber Type")
 if len(filtered_df) > 0:
     rows = [(s, filtered_df[filtered_df["subscriber_type"] == s]) for s in sorted(filtered_df["subscriber_type"].unique())]
-    st.dataframe(breakdown_table(rows), width="stretch", hide_index=True)
+    show_table(breakdown_table(rows))
 else:
     st.warning("No data to display")
 
@@ -339,7 +358,7 @@ with col1:
             ("Quiz Client", filtered_df[filtered_df["quiz_client"]]),
             ("Non-Quiz", filtered_df[~filtered_df["quiz_client"]]),
         ]
-        st.dataframe(breakdown_table(rows), width="stretch", hide_index=True)
+        show_table(breakdown_table(rows))
     else:
         st.warning("No data to display")
 
@@ -350,7 +369,7 @@ with col2:
             ("Consult Client", filtered_df[filtered_df["consult_client"]]),
             ("Non-Consult", filtered_df[~filtered_df["consult_client"]]),
         ]
-        st.dataframe(breakdown_table(rows), width="stretch", hide_index=True)
+        show_table(breakdown_table(rows))
     else:
         st.warning("No data to display")
 
@@ -375,7 +394,7 @@ if len(filtered_df) > 0:
             "Orders/Customer": round(scalar_metric(seg, "orders"), 1),
         })
     detail_df = pd.DataFrame(detail).sort_values(["Cohort Month", "Subscriber Type"]).reset_index(drop=True)
-    st.dataframe(detail_df, width="stretch", hide_index=True)
+    show_table(detail_df)
 else:
     st.warning("No data to display with current filters")
 
@@ -416,10 +435,11 @@ if len(filtered_df) > 0:
     row_vals, row_sel = dim_accessor(row_dim)
     col_vals, col_sel = dim_accessor(col_dim)
 
+    dp = METRIC_DP.get(metric, 1)
     z = []
     for rv in row_vals:
         row_data = row_sel(filtered_df, rv)
-        z.append([round(scalar_metric(col_sel(row_data, cv), metric), 2) for cv in col_vals])
+        z.append([round(scalar_metric(col_sel(row_data, cv), metric), dp) for cv in col_vals])
 
     fig_heat = go.Figure(
         data=go.Heatmap(
@@ -427,7 +447,7 @@ if len(filtered_df) > 0:
             x=col_vals,
             y=row_vals,
             colorscale="YlOrRd",
-            text=[[f"{v:.1f}" for v in row] for row in z],
+            text=[[f"{v:,.{dp}f}" for v in row] for row in z],
             texttemplate="%{text}",
             textfont={"size": 9},
         )
