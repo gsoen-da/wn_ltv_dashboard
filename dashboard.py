@@ -6,12 +6,21 @@ st.set_page_config(page_title="Customer Segmentation Dashboard", layout="wide")
 
 st.title("📊 LTV Dashboard")
 
-# Load data
+# ---------------------------------------------------------------------------
+# Data: ROW-LEVEL grain — one row per customer per window (6M / 12M).
+# Product membership is expressed as boolean flags:
+#   first_<Product>  = product was in the customer's first order
+#   bought_<Product> = product was bought anywhere in the window
+# Because each row is one customer, count = number of rows (always distinct).
+# ---------------------------------------------------------------------------
 @st.cache_data
 def load_data():
-    return pd.read_excel("reports/customer_segmentation.xlsx", sheet_name="Data")
+    return pd.read_parquet("customer_segmentation.parquet")
 
 df = load_data()
+
+# Derive the product list from the flag columns.
+PRODUCTS = sorted(c[len("first_"):] for c in df.columns if c.startswith("first_"))
 
 # Convert cohort_month to datetime for proper sorting
 df["cohort_dt"] = pd.to_datetime(df["cohort_month"])
@@ -19,31 +28,17 @@ df = df.sort_values("cohort_dt")
 
 st.sidebar.header("Filters")
 
-# Horizon is the primary filter — pick exactly one (default 12M)
-horizon = st.sidebar.radio(
-    "LTV Horizon",
-    ["12 Months", "6 Months"],
-    index=0,
-)
+# 1) Horizon — pick exactly one (default 12M). Each row belongs to one window,
+#    so this guarantees every count below is a distinct-customer count.
+horizon = st.sidebar.radio("LTV Horizon", ["12 Months", "6 Months"], index=0)
 horizon_col = "12M" if horizon == "12 Months" else "6M"
-
-# Everything downstream operates on the selected-horizon slice
 df = df[df[horizon_col]].copy()
 
-# Get unique values for filters (within the chosen horizon)
+# 2) Fiscal Year
 fys = sorted(df["fy"].unique())
-subscriber_types = sorted(df["subscriber_type"].unique())
-first_products = sorted(df["first_product"].unique())
-all_products = sorted(df["all_products"].unique())
+selected_fy = st.sidebar.multiselect("Fiscal Year", fys, default=fys[-1:])
 
-# FY is the next filter
-selected_fy = st.sidebar.multiselect(
-    "Fiscal Year",
-    fys,
-    default=fys[-1:],  # Default to latest FY
-)
-
-# Month filter depends on selected FY
+# 3) Cohort Month (cascades from FY)
 available_months = sorted(df[df["fy"].isin(selected_fy)]["cohort_month"].unique())
 selected_months = st.sidebar.multiselect(
     "Cohort Month",
@@ -51,57 +46,97 @@ selected_months = st.sidebar.multiselect(
     default=available_months[-6:] if len(available_months) >= 6 else available_months,
 )
 
+# 4) Subscriber type
+subscriber_types = sorted(df["subscriber_type"].unique())
 selected_subscriber = st.sidebar.multiselect(
-    "Subscriber Type",
-    subscriber_types,
-    default=subscriber_types,
+    "Subscriber Type", subscriber_types, default=subscriber_types
 )
 
-selected_first_product = st.sidebar.multiselect(
-    "First Product",
-    first_products,
-    default=["All"],
+# 5) Product filters — flag based, so no double counting.
+#    Empty selection = no filter (all customers). Multiple picks = "any of"
+#    (OR within a dimension). The two dimensions combine with AND, which lets
+#    you ask e.g. "started with Vitamin D AND later bought Iron".
+st.sidebar.subheader("Products")
+selected_first_products = st.sidebar.multiselect(
+    "First Order Includes", PRODUCTS, default=[],
+    help="Customers whose FIRST order included any of these. Empty = all customers.",
+)
+selected_bought_products = st.sidebar.multiselect(
+    "Bought In Window", PRODUCTS, default=[],
+    help="Customers who bought any of these within the window. Empty = all customers.",
 )
 
-selected_all_products = st.sidebar.multiselect(
-    "All Products",
-    all_products,
-    default=["All"],
-)
-
-# New filters for quiz and consult
+# 6) Quiz / Consult
 st.sidebar.subheader("Program Status")
 selected_quiz = st.sidebar.multiselect(
-    "Quiz Client",
-    [True, False],
-    default=[True, False],
+    "Quiz Client", [True, False], default=[True, False],
     format_func=lambda x: "Yes" if x else "No",
 )
-
 selected_consult = st.sidebar.multiselect(
-    "Consult Client",
-    [True, False],
-    default=[True, False],
+    "Consult Client", [True, False], default=[True, False],
     format_func=lambda x: "Yes" if x else "No",
 )
 
 # Apply filters
-filtered_df = df[
-    (df["cohort_month"].isin(selected_months))
-    & (df["fy"].isin(selected_fy))
-    & (df["subscriber_type"].isin(selected_subscriber))
-    & (df["first_product"].isin(selected_first_product))
-    & (df["all_products"].isin(selected_all_products))
-    & (df["quiz_client"].isin(selected_quiz))
-    & (df["consult_client"].isin(selected_consult))
-].copy()
+mask = (
+    df["cohort_month"].isin(selected_months)
+    & df["fy"].isin(selected_fy)
+    & df["subscriber_type"].isin(selected_subscriber)
+    & df["quiz_client"].isin(selected_quiz)
+    & df["consult_client"].isin(selected_consult)
+)
+if selected_first_products:
+    mask &= df[[f"first_{p}" for p in selected_first_products]].any(axis=1)
+if selected_bought_products:
+    mask &= df[[f"bought_{p}" for p in selected_bought_products]].any(axis=1)
 
-st.sidebar.info(f"📈 {len(filtered_df)} rows after filtering")
+filtered_df = df[mask].copy()
+
+st.sidebar.info(f"📈 {len(filtered_df):,} customers after filtering")
+
+# ---------------------------------------------------------------------------
+# Metric helpers — every row is one customer.
+#   count  -> number of customers
+#   ltv/ltr-> mean across customers
+#   orders -> mean orders per customer
+#   aov    -> total revenue / total orders
+#   ipo    -> total items / total orders
+# ---------------------------------------------------------------------------
+def scalar_metric(data, metric):
+    if len(data) == 0:
+        return 0
+    if metric == "count":
+        return len(data)
+    if metric == "aov":
+        total_orders = data["orders"].sum()
+        return data["ltr"].sum() / total_orders if total_orders else 0
+    if metric == "ipo":
+        total_orders = data["orders"].sum()
+        return data["items"].sum() / total_orders if total_orders else 0
+    if metric == "orders":
+        return data["orders"].mean()
+    return data[metric].mean()  # ltv, ltr
+
+
+def cohort_series(data, metric):
+    """Return a metric aggregated per cohort month (indexed by cohort_dt)."""
+    g = data.groupby("cohort_dt")
+    if metric == "count":
+        s = g.size()
+    elif metric == "aov":
+        s = g["ltr"].sum() / g["orders"].sum()
+    elif metric == "ipo":
+        s = g["items"].sum() / g["orders"].sum()
+    elif metric == "orders":
+        s = g["orders"].mean()
+    else:  # ltv, ltr
+        s = g[metric].mean()
+    return s.sort_index()
+
 
 # Main content
 col1, col2 = st.columns([2, 1])
 
-# Metric and breakdown selection (moved to main area)
 with col1:
     metric = st.selectbox(
         "Select Metric to Display",
@@ -114,7 +149,7 @@ with col1:
             "ipo": "IPO (Items Per Order)",
             "orders": "Orders Per Customer",
         }[x],
-        key="metric_select"
+        key="metric_select",
     )
 
 with col2:
@@ -125,62 +160,47 @@ with col2:
         horizontal=False,
     )
 
+is_per_customer = metric in ["ltv", "ltr", "aov", "ipo", "orders"]
+
 # Main graph and stats area
 col1, col2 = st.columns([2, 1])
 
 with col1:
-    st.subheader(f"Data Summary ({len(filtered_df)} records)")
-    # Group by cohort for time series
+    st.subheader(f"Data Summary ({len(filtered_df):,} customers)")
     if len(filtered_df) > 0:
         fig_time = go.Figure()
 
-        # Determine breakdown dimension and values
         if time_series_breakdown == "No Breakdown (Total)":
-            breakdown_values = [None]
             breakdown_dim = None
+            breakdown_values = [None]
         elif time_series_breakdown == "By Subscriber Type":
             breakdown_dim = "subscriber_type"
             breakdown_values = sorted(filtered_df[breakdown_dim].unique())
         elif time_series_breakdown == "By Quiz Client":
             breakdown_dim = "quiz_client"
-            breakdown_values = [False, True]  # False first, then True
+            breakdown_values = [False, True]
         else:  # By Consult Client
             breakdown_dim = "consult_client"
             breakdown_values = [False, True]
 
-        # Create a line for each breakdown value + one for All
         colors = ["#1f77b4", "#ff7f0e", "#2ca02c", "#d62728"]
-        all_plot_values = []  # Store all values for stats
+        all_plot_values = []
 
         for idx, breakdown_val in enumerate(breakdown_values):
             if breakdown_dim:
                 subset = filtered_df[filtered_df[breakdown_dim] == breakdown_val]
-                label = str(breakdown_val) if isinstance(breakdown_val, bool) else breakdown_val
-                if isinstance(breakdown_val, bool):
-                    label = "Yes" if breakdown_val else "No"
+                label = "Yes" if breakdown_val is True else "No" if breakdown_val is False else breakdown_val
             else:
                 subset = filtered_df
                 label = "All"
 
-            # Aggregate by cohort with proper weighting
-            if metric in ["ltv", "ltr", "aov", "ipo", "orders"]:
-                # Weighted average: multiply metric by count, sum, then divide by count sum
-                weighted_sum = (subset[metric] * subset["count"]).groupby(subset["cohort_dt"]).sum()
-                count_sum = subset["count"].groupby(subset["cohort_dt"]).sum()
-                time_data = pd.DataFrame({
-                    "cohort_dt": weighted_sum.index,
-                    metric: (weighted_sum / count_sum).values
-                })
-            else:
-                time_data = subset.groupby("cohort_dt")[metric].sum().reset_index()
-
-            time_data = time_data.sort_values("cohort_dt")
-            all_plot_values.extend(time_data[metric].values)
+            series = cohort_series(subset, metric).dropna()
+            all_plot_values.extend(series.values)
 
             fig_time.add_trace(
                 go.Scatter(
-                    x=time_data["cohort_dt"],
-                    y=time_data[metric],
+                    x=series.index,
+                    y=series.values,
                     mode="lines+markers",
                     name=label,
                     line=dict(color=colors[idx % len(colors)], width=2),
@@ -188,25 +208,14 @@ with col1:
                 )
             )
 
-        # Add "All" line if breakdown is selected
+        # Add an "All" reference line when a breakdown is active.
         if breakdown_dim:
-            if metric in ["ltv", "ltr", "aov", "ipo", "orders"]:
-                weighted_sum_all = (filtered_df[metric] * filtered_df["count"]).groupby(filtered_df["cohort_dt"]).sum()
-                count_sum_all = filtered_df["count"].groupby(filtered_df["cohort_dt"]).sum()
-                time_data_all = pd.DataFrame({
-                    "cohort_dt": weighted_sum_all.index,
-                    metric: (weighted_sum_all / count_sum_all).values
-                })
-            else:
-                time_data_all = filtered_df.groupby("cohort_dt")[metric].sum().reset_index()
-
-            time_data_all = time_data_all.sort_values("cohort_dt")
-            all_plot_values.extend(time_data_all[metric].values)
-
+            series_all = cohort_series(filtered_df, metric).dropna()
+            all_plot_values.extend(series_all.values)
             fig_time.add_trace(
                 go.Scatter(
-                    x=time_data_all["cohort_dt"],
-                    y=time_data_all[metric],
+                    x=series_all.index,
+                    y=series_all.values,
                     mode="lines+markers",
                     name="All",
                     line=dict(color="black", width=3, dash="dash"),
@@ -221,235 +230,191 @@ with col1:
             hovermode="x unified",
             height=450,
         )
-        st.plotly_chart(fig_time, use_container_width=True)
+        st.plotly_chart(fig_time, width="stretch")
 
 with col2:
     st.subheader("Quick Stats")
     if len(filtered_df) > 0:
-        if metric in ["ltv", "ltr", "aov", "ipo", "orders"]:
-            # For per-customer metrics, calculate weighted average of ALL filtered data
-            weighted_avg = (filtered_df[metric] * filtered_df["count"]).sum() / filtered_df["count"].sum()
-            st.metric(
-                "Avg (Weighted)",
-                f"{weighted_avg:,.2f}",
-            )
-            # Min/Max of the actual plotted lines
+        if is_per_customer:
+            st.metric("Avg", f"{scalar_metric(filtered_df, metric):,.2f}")
             if all_plot_values:
-                st.metric(
-                    "Min (Plotted)",
-                    f"{min(all_plot_values):,.2f}",
-                )
-                st.metric(
-                    "Max (Plotted)",
-                    f"{max(all_plot_values):,.2f}",
-                )
+                st.metric("Min (Plotted)", f"{min(all_plot_values):,.2f}")
+                st.metric("Max (Plotted)", f"{max(all_plot_values):,.2f}")
         else:
-            # For count, sum total customers
-            st.metric(
-                "Total",
-                f"{filtered_df[metric].sum():,.0f}",
-            )
-            # Min/Max of plotted lines
+            st.metric("Total Customers", f"{len(filtered_df):,.0f}")
             if all_plot_values:
-                st.metric(
-                    "Min (Plotted)",
-                    f"{min(all_plot_values):,.0f}",
-                )
-                st.metric(
-                    "Max (Plotted)",
-                    f"{max(all_plot_values):,.0f}",
-                )
+                st.metric("Min (Plotted)", f"{min(all_plot_values):,.0f}")
+                st.metric("Max (Plotted)", f"{max(all_plot_values):,.0f}")
     else:
         st.warning("No data matches your filters")
 
 st.divider()
 
-# Breakdown by First Product (detailed table)
-st.subheader("Breakdown by First Product")
+
+def breakdown_table(rows):
+    """Build a tidy breakdown dataframe from a list of (label, subset) pairs."""
+    out = []
+    for label, seg in rows:
+        if len(seg) == 0:
+            continue
+        out.append({
+            "Segment": label,
+            "Customers": len(seg),
+            "LTV": round(scalar_metric(seg, "ltv"), 2),
+            "LTR": round(scalar_metric(seg, "ltr"), 2),
+            "AOV": round(scalar_metric(seg, "aov"), 2),
+            "IPO": round(scalar_metric(seg, "ipo"), 2),
+            "Orders/Customer": round(scalar_metric(seg, "orders"), 2),
+        })
+    return pd.DataFrame(out).sort_values("Customers", ascending=False) if out else pd.DataFrame()
+
+
+# Breakdown by First Product (each row = customers whose first order included that product;
+# rows overlap because a first order can include several products — each is a valid segment).
+st.subheader("Breakdown by First Order Product")
+st.caption("Customers can appear under more than one product (multi-item first orders). Each row is an independent segment.")
 if len(filtered_df) > 0:
-    # Aggregate by first_product with weighted averages for per-customer metrics
-    prod_breakdown = []
-    for product in filtered_df["first_product"].unique():
-        product_data = filtered_df[filtered_df["first_product"] == product]
-        total_count = product_data["count"].sum()
-
-        row = {
-            "First Product": product,
-            "Customers": total_count,
-            "LTV": round((product_data["ltv"] * product_data["count"]).sum() / total_count, 2) if total_count > 0 else 0,
-            "LTR": round((product_data["ltr"] * product_data["count"]).sum() / total_count, 2) if total_count > 0 else 0,
-            "AOV": round((product_data["aov"] * product_data["count"]).sum() / total_count, 2) if total_count > 0 else 0,
-            "IPO": round((product_data["ipo"] * product_data["count"]).sum() / total_count, 2) if total_count > 0 else 0,
-            "Orders/Customer": round((product_data["orders"] * product_data["count"]).sum() / total_count, 2) if total_count > 0 else 0,
-        }
-        prod_breakdown.append(row)
-
-    prod_breakdown_df = pd.DataFrame(prod_breakdown).sort_values("Customers", ascending=False)
-    st.dataframe(prod_breakdown_df, use_container_width=True, hide_index=True)
+    rows = [(p, filtered_df[filtered_df[f"first_{p}"]]) for p in PRODUCTS]
+    tbl = breakdown_table(rows)
+    if len(tbl):
+        st.dataframe(tbl, width="stretch", hide_index=True)
+    else:
+        st.info("No first-order product activity in this selection.")
 else:
     st.warning("No data to display")
 
 st.divider()
 
-# Breakdown by Subscriber Type (detailed table)
+# Breakdown by Products Bought in Window
+st.subheader("Breakdown by Products Bought (in window)")
+st.caption("Customers can appear under more than one product. Each row is an independent segment.")
+if len(filtered_df) > 0:
+    rows = [(p, filtered_df[filtered_df[f"bought_{p}"]]) for p in PRODUCTS]
+    tbl = breakdown_table(rows)
+    if len(tbl):
+        st.dataframe(tbl, width="stretch", hide_index=True)
+    else:
+        st.info("No product activity in this selection.")
+else:
+    st.warning("No data to display")
+
+st.divider()
+
+# Breakdown by Subscriber Type (non-overlapping — clean partition)
 st.subheader("Breakdown by Subscriber Type")
 if len(filtered_df) > 0:
-    # Aggregate by subscriber_type with weighted averages
-    sub_breakdown = []
-    for sub_type in filtered_df["subscriber_type"].unique():
-        sub_data = filtered_df[filtered_df["subscriber_type"] == sub_type]
-        total_count = sub_data["count"].sum()
-
-        row = {
-            "Subscriber Type": sub_type,
-            "Customers": total_count,
-            "LTV": round((sub_data["ltv"] * sub_data["count"]).sum() / total_count, 2) if total_count > 0 else 0,
-            "LTR": round((sub_data["ltr"] * sub_data["count"]).sum() / total_count, 2) if total_count > 0 else 0,
-            "AOV": round((sub_data["aov"] * sub_data["count"]).sum() / total_count, 2) if total_count > 0 else 0,
-            "IPO": round((sub_data["ipo"] * sub_data["count"]).sum() / total_count, 2) if total_count > 0 else 0,
-            "Orders/Customer": round((sub_data["orders"] * sub_data["count"]).sum() / total_count, 2) if total_count > 0 else 0,
-        }
-        sub_breakdown.append(row)
-
-    sub_breakdown_df = pd.DataFrame(sub_breakdown).sort_values("Customers", ascending=False)
-    st.dataframe(sub_breakdown_df, use_container_width=True, hide_index=True)
+    rows = [(s, filtered_df[filtered_df["subscriber_type"] == s]) for s in sorted(filtered_df["subscriber_type"].unique())]
+    st.dataframe(breakdown_table(rows), width="stretch", hide_index=True)
 else:
     st.warning("No data to display")
 
 st.divider()
 
-# Breakdown by Quiz/Consult Status
+# Breakdown by Quiz / Consult
 col1, col2 = st.columns(2)
-
 with col1:
     st.subheader("Breakdown by Quiz Client Status")
     if len(filtered_df) > 0:
-        quiz_breakdown = []
-        for status in [True, False]:
-            quiz_data = filtered_df[filtered_df["quiz_client"] == status]
-            total_count = quiz_data["count"].sum()
-
-            row = {
-                "Status": "Quiz Client" if status else "Non-Quiz",
-                "Customers": total_count,
-                "LTV": round((quiz_data["ltv"] * quiz_data["count"]).sum() / total_count, 2) if total_count > 0 else 0,
-                "LTR": round((quiz_data["ltr"] * quiz_data["count"]).sum() / total_count, 2) if total_count > 0 else 0,
-                "AOV": round((quiz_data["aov"] * quiz_data["count"]).sum() / total_count, 2) if total_count > 0 else 0,
-                "IPO": round((quiz_data["ipo"] * quiz_data["count"]).sum() / total_count, 2) if total_count > 0 else 0,
-                "Orders/Customer": round((quiz_data["orders"] * quiz_data["count"]).sum() / total_count, 2) if total_count > 0 else 0,
-            }
-            quiz_breakdown.append(row)
-
-        quiz_breakdown_df = pd.DataFrame(quiz_breakdown).sort_values("Customers", ascending=False)
-        st.dataframe(quiz_breakdown_df, use_container_width=True, hide_index=True)
+        rows = [
+            ("Quiz Client", filtered_df[filtered_df["quiz_client"]]),
+            ("Non-Quiz", filtered_df[~filtered_df["quiz_client"]]),
+        ]
+        st.dataframe(breakdown_table(rows), width="stretch", hide_index=True)
     else:
         st.warning("No data to display")
 
 with col2:
     st.subheader("Breakdown by Consult Client Status")
     if len(filtered_df) > 0:
-        consult_breakdown = []
-        for status in [True, False]:
-            consult_data = filtered_df[filtered_df["consult_client"] == status]
-            total_count = consult_data["count"].sum()
-
-            row = {
-                "Status": "Consult Client" if status else "Non-Consult",
-                "Customers": total_count,
-                "LTV": round((consult_data["ltv"] * consult_data["count"]).sum() / total_count, 2) if total_count > 0 else 0,
-                "LTR": round((consult_data["ltr"] * consult_data["count"]).sum() / total_count, 2) if total_count > 0 else 0,
-                "AOV": round((consult_data["aov"] * consult_data["count"]).sum() / total_count, 2) if total_count > 0 else 0,
-                "IPO": round((consult_data["ipo"] * consult_data["count"]).sum() / total_count, 2) if total_count > 0 else 0,
-                "Orders/Customer": round((consult_data["orders"] * consult_data["count"]).sum() / total_count, 2) if total_count > 0 else 0,
-            }
-            consult_breakdown.append(row)
-
-        consult_breakdown_df = pd.DataFrame(consult_breakdown).sort_values("Customers", ascending=False)
-        st.dataframe(consult_breakdown_df, use_container_width=True, hide_index=True)
+        rows = [
+            ("Consult Client", filtered_df[filtered_df["consult_client"]]),
+            ("Non-Consult", filtered_df[~filtered_df["consult_client"]]),
+        ]
+        st.dataframe(breakdown_table(rows), width="stretch", hide_index=True)
     else:
         st.warning("No data to display")
 
 st.divider()
 
-# Detailed data table
-st.subheader("Detailed Data")
-display_cols = ["cohort_month", "fy", "subscriber_type", "first_product", "all_products", "quiz_client", "consult_client", "count", "ltv", "ltr", "aov", "ipo", "orders"]
+# Detailed (aggregated) table — one row per cohort × subscriber type
+st.subheader("Detailed Data (by cohort & subscriber type)")
 if len(filtered_df) > 0:
-    st.dataframe(
-        filtered_df[display_cols]
-        .sort_values(["cohort_month", "subscriber_type", "first_product"])
-        .reset_index(drop=True),
-        use_container_width=True,
-        hide_index=True,
-    )
+    detail = []
+    for (cohort, sub), seg in filtered_df.groupby(["cohort_month", "subscriber_type"]):
+        detail.append({
+            "Cohort Month": cohort,
+            "Subscriber Type": sub,
+            "Customers": len(seg),
+            "LTV": round(scalar_metric(seg, "ltv"), 2),
+            "LTR": round(scalar_metric(seg, "ltr"), 2),
+            "AOV": round(scalar_metric(seg, "aov"), 2),
+            "IPO": round(scalar_metric(seg, "ipo"), 2),
+            "Orders/Customer": round(scalar_metric(seg, "orders"), 2),
+        })
+    detail_df = pd.DataFrame(detail).sort_values(["Cohort Month", "Subscriber Type"]).reset_index(drop=True)
+    st.dataframe(detail_df, width="stretch", hide_index=True)
 else:
     st.warning("No data to display with current filters")
 
-# Heatmap option
 st.divider()
+
+# Heatmap — product × product (and product × subscriber type)
 st.subheader("Segment Performance Heatmap")
 
-# Helper function to create weighted average heatmap
-def create_heatmap(data, row_dim, col_dim, metric_col):
-    """Create heatmap using weighted averages for per-customer metrics"""
-    result = []
-    for row_val in data[row_dim].unique():
-        row_data = []
-        for col_val in data[col_dim].unique():
-            cell_data = data[(data[row_dim] == row_val) & (data[col_dim] == col_val)]
-            if len(cell_data) > 0:
-                if metric_col in ["ltv", "ltr", "aov", "ipo", "orders"]:
-                    # Weighted average for per-customer metrics
-                    total_count = cell_data["count"].sum()
-                    weighted_avg = (cell_data[metric_col] * cell_data["count"]).sum() / total_count if total_count > 0 else 0
-                    row_data.append(round(weighted_avg, 2))
-                else:
-                    # Sum for count metrics
-                    row_data.append(round(cell_data[metric_col].sum(), 2))
-            else:
-                row_data.append(0)
-        result.append(row_data)
-    return result
+
+def dim_accessor(dim):
+    """Return (values, selector(data, value)) for a heatmap dimension."""
+    if dim == "first":
+        return PRODUCTS, lambda d, v: d[d[f"first_{v}"]]
+    if dim == "bought":
+        return PRODUCTS, lambda d, v: d[d[f"bought_{v}"]]
+    # subscriber_type
+    return sorted(filtered_df["subscriber_type"].unique()), lambda d, v: d[d["subscriber_type"] == v]
+
 
 if len(filtered_df) > 0:
     heatmap_config = st.radio(
         "Heatmap Layout",
-        ["First Product × All Products", "First Product × Subscriber Type", "All Products × Subscriber Type"],
+        ["First × Bought Products", "First Product × Subscriber Type", "Bought Product × Subscriber Type"],
         horizontal=True,
-        key="heatmap_config"
+        key="heatmap_config",
     )
 
-    if heatmap_config == "First Product × All Products":
-        row_dim, col_dim = "first_product", "all_products"
+    if heatmap_config == "First × Bought Products":
+        row_dim, col_dim = "first", "bought"
+        row_title, col_title = "First Order Product", "Bought In Window"
     elif heatmap_config == "First Product × Subscriber Type":
-        row_dim, col_dim = "first_product", "subscriber_type"
-    else:  # All Products × Subscriber Type
-        row_dim, col_dim = "all_products", "subscriber_type"
+        row_dim, col_dim = "first", "subscriber_type"
+        row_title, col_title = "First Order Product", "Subscriber Type"
+    else:
+        row_dim, col_dim = "bought", "subscriber_type"
+        row_title, col_title = "Bought In Window", "Subscriber Type"
 
-    # Get unique values for heatmap
-    rows = sorted(filtered_df[row_dim].unique())
-    cols = sorted(filtered_df[col_dim].unique())
+    row_vals, row_sel = dim_accessor(row_dim)
+    col_vals, col_sel = dim_accessor(col_dim)
 
-    # Create weighted average heatmap data
-    heatmap_values = create_heatmap(filtered_df, row_dim, col_dim, metric)
+    z = []
+    for rv in row_vals:
+        row_data = row_sel(filtered_df, rv)
+        z.append([round(scalar_metric(col_sel(row_data, cv), metric), 2) for cv in col_vals])
 
     fig_heat = go.Figure(
         data=go.Heatmap(
-            z=heatmap_values,
-            x=cols,
-            y=rows,
+            z=z,
+            x=col_vals,
+            y=row_vals,
             colorscale="YlOrRd",
-            text=[[f"{v:.1f}" for v in row] for row in heatmap_values],
+            text=[[f"{v:.1f}" for v in row] for row in z],
             texttemplate="%{text}",
             textfont={"size": 9},
         )
     )
     fig_heat.update_layout(
-        title=f"{metric.upper()} Heatmap: {row_dim.title()} × {col_dim.title()} (Weighted Avg)",
-        xaxis_title=col_dim.replace("_", " ").title(),
-        yaxis_title=row_dim.replace("_", " ").title(),
-        height=max(400, len(rows) * 30),
+        title=f"{metric.upper()} Heatmap: {row_title} × {col_title}",
+        xaxis_title=col_title,
+        yaxis_title=row_title,
+        height=max(400, len(row_vals) * 30),
     )
-    st.plotly_chart(fig_heat, use_container_width=True)
+    st.plotly_chart(fig_heat, width="stretch")
 else:
     st.warning("No data to display")
