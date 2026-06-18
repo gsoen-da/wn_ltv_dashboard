@@ -4,7 +4,7 @@ import plotly.graph_objects as go
 
 st.set_page_config(page_title="Customer Segmentation Dashboard", layout="wide")
 
-st.title("📊 LTV Dashboard")
+st.title("LTV Dashboard")
 
 # ---------------------------------------------------------------------------
 # Data: ROW-LEVEL grain — one row per customer per window (6M / 12M).
@@ -253,10 +253,10 @@ with col2:
     st.subheader("Quick Stats")
     if len(filtered_df) > 0:
         if is_per_customer:
-            st.metric("Avg", f"{scalar_metric(filtered_df, metric):,.2f}")
+            st.metric("Avg", f"{scalar_metric(filtered_df, metric):,.0f}")
             if all_plot_values:
-                st.metric("Min (Plotted)", f"{min(all_plot_values):,.2f}")
-                st.metric("Max (Plotted)", f"{max(all_plot_values):,.2f}")
+                st.metric("Min (Plotted)", f"{min(all_plot_values):,.0f}")
+                st.metric("Max (Plotted)", f"{max(all_plot_values):,.0f}")
         else:
             st.metric("Total Customers", f"{len(filtered_df):,.0f}")
             if all_plot_values:
@@ -277,14 +277,14 @@ def breakdown_table(rows):
         out.append({
             "Segment": label,
             "Customers": len(seg),
-            "LTV": round(scalar_metric(seg, "ltv"), 2),
-            "CAC": round(scalar_metric(seg, "cac"), 2),
-            "CM3": round(scalar_metric(seg, "cm3"), 2),
-            "LTV:CAC": round(scalar_metric(seg, "ltv_cac"), 2),
-            "LTR": round(scalar_metric(seg, "ltr"), 2),
-            "AOV": round(scalar_metric(seg, "aov"), 2),
+            "LTV": round(scalar_metric(seg, "ltv"), 0),
+            "CAC": round(scalar_metric(seg, "cac"), 0),
+            "CM3": round(scalar_metric(seg, "cm3"), 0),
+            "LTV:CAC": round(scalar_metric(seg, "ltv_cac"), 1),
+            "LTR": round(scalar_metric(seg, "ltr"), 0),
+            "AOV": round(scalar_metric(seg, "aov"), 1),
             "IPO": round(scalar_metric(seg, "ipo"), 2),
-            "Orders/Customer": round(scalar_metric(seg, "orders"), 2),
+            "Orders/Customer": round(scalar_metric(seg, "orders"), 1),
         })
     return pd.DataFrame(out).sort_values("Customers", ascending=False) if out else pd.DataFrame()
 
@@ -365,14 +365,14 @@ if len(filtered_df) > 0:
             "Cohort Month": cohort,
             "Subscriber Type": sub,
             "Customers": len(seg),
-            "LTV": round(scalar_metric(seg, "ltv"), 2),
-            "CAC": round(scalar_metric(seg, "cac"), 2),
-            "CM3": round(scalar_metric(seg, "cm3"), 2),
-            "LTV:CAC": round(scalar_metric(seg, "ltv_cac"), 2),
-            "LTR": round(scalar_metric(seg, "ltr"), 2),
-            "AOV": round(scalar_metric(seg, "aov"), 2),
+            "LTV": round(scalar_metric(seg, "ltv"), 0),
+            "CAC": round(scalar_metric(seg, "cac"), 0),
+            "CM3": round(scalar_metric(seg, "cm3"), 0),
+            "LTV:CAC": round(scalar_metric(seg, "ltv_cac"), 1),
+            "LTR": round(scalar_metric(seg, "ltr"), 0),
+            "AOV": round(scalar_metric(seg, "aov"), 1),
             "IPO": round(scalar_metric(seg, "ipo"), 2),
-            "Orders/Customer": round(scalar_metric(seg, "orders"), 2),
+            "Orders/Customer": round(scalar_metric(seg, "orders"), 1),
         })
     detail_df = pd.DataFrame(detail).sort_values(["Cohort Month", "Subscriber Type"]).reset_index(drop=True)
     st.dataframe(detail_df, width="stretch", hide_index=True)
