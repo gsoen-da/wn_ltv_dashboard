@@ -22,6 +22,10 @@ df = load_data()
 # Derive the product list from the flag columns.
 PRODUCTS = sorted(c[len("first_"):] for c in df.columns if c.startswith("first_"))
 
+# CM3 = contribution margin after CAC (LTV already nets COGS + fulfilment, so
+# CM3 = LTV − CAC). Blank where CAC is unknown.
+df["cm3"] = df["ltv"] - df["cac"]
+
 # Convert cohort_month to datetime for proper sorting
 df["cohort_dt"] = pd.to_datetime(df["cohort_month"])
 df = df.sort_values("cohort_dt")
@@ -118,7 +122,10 @@ def scalar_metric(data, metric):
         return data["items"].sum() / total_orders if total_orders else 0
     if metric == "orders":
         return data["orders"].mean()
-    return data[metric].mean()  # ltv, ltr
+    if metric == "ltv_cac":
+        total_cac = data["cac"].sum()
+        return data["ltv"].sum() / total_cac if total_cac else 0
+    return data[metric].mean()  # ltv, ltr, cac, cm3
 
 
 def cohort_series(data, metric):
@@ -132,7 +139,9 @@ def cohort_series(data, metric):
         s = g["items"].sum() / g["orders"].sum()
     elif metric == "orders":
         s = g["orders"].mean()
-    else:  # ltv, ltr
+    elif metric == "ltv_cac":
+        s = g["ltv"].sum() / g["cac"].sum()
+    else:  # ltv, ltr, cac, cm3
         s = g[metric].mean()
     return s.sort_index()
 
@@ -143,11 +152,14 @@ col1, col2 = st.columns([2, 1])
 with col1:
     metric = st.selectbox(
         "Select Metric to Display",
-        ["count", "ltv", "ltr", "aov", "ipo", "orders"],
+        ["count", "ltv", "cm3", "cac", "ltv_cac", "ltr", "aov", "ipo", "orders"],
         index=1,  # default to LTV
         format_func=lambda x: {
             "count": "Customer Count",
             "ltv": "LTV (Lifetime Value)",
+            "cm3": "CM3 (LTV − CAC)",
+            "cac": "CAC (Acquisition Cost)",
+            "ltv_cac": "LTV : CAC ratio",
             "ltr": "LTR (Lifetime Revenue)",
             "aov": "AOV (Average Order Value)",
             "ipo": "IPO (Items Per Order)",
@@ -164,7 +176,8 @@ with col2:
         horizontal=False,
     )
 
-is_per_customer = metric in ["ltv", "ltr", "aov", "ipo", "orders"]
+# Only "count" is a total; everything else (incl. CAC metrics) shows as an average/ratio.
+is_per_customer = metric != "count"
 
 # Main graph and stats area
 col1, col2 = st.columns([2, 1])
@@ -265,6 +278,9 @@ def breakdown_table(rows):
             "Segment": label,
             "Customers": len(seg),
             "LTV": round(scalar_metric(seg, "ltv"), 2),
+            "CAC": round(scalar_metric(seg, "cac"), 2),
+            "CM3": round(scalar_metric(seg, "cm3"), 2),
+            "LTV:CAC": round(scalar_metric(seg, "ltv_cac"), 2),
             "LTR": round(scalar_metric(seg, "ltr"), 2),
             "AOV": round(scalar_metric(seg, "aov"), 2),
             "IPO": round(scalar_metric(seg, "ipo"), 2),
@@ -350,6 +366,9 @@ if len(filtered_df) > 0:
             "Subscriber Type": sub,
             "Customers": len(seg),
             "LTV": round(scalar_metric(seg, "ltv"), 2),
+            "CAC": round(scalar_metric(seg, "cac"), 2),
+            "CM3": round(scalar_metric(seg, "cm3"), 2),
+            "LTV:CAC": round(scalar_metric(seg, "ltv_cac"), 2),
             "LTR": round(scalar_metric(seg, "ltr"), 2),
             "AOV": round(scalar_metric(seg, "aov"), 2),
             "IPO": round(scalar_metric(seg, "ipo"), 2),
