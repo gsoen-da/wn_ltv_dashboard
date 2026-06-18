@@ -1,9 +1,0 @@
-{
-  "permissions": {
-    "allow": [
-      "Read(//c/Users/GillesSoenen/Claude playground/Subscription tracker/**)",
-      "Bash(python -m py_compile one_offs/quiz_consult_followups.py)",
-      "Bash(PYTHONIOENCODING=utf-8 PYTHONUTF8=1 python one_offs/quiz_consult_followups.py)"
-    ]
-  }
-}
