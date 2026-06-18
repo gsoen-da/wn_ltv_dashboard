@@ -83,13 +83,13 @@ selected_bought_products = st.sidebar.multiselect(
 )
 
 # 6) Quiz / Consult
-st.sidebar.subheader("Programme status")
+st.sidebar.subheader("Customer activity")
 selected_quiz = st.sidebar.multiselect(
-    "Quiz client", [True, False], default=[True, False],
+    "Quiz customer", [True, False], default=[True, False],
     format_func=lambda x: "Yes" if x else "No",
 )
 selected_consult = st.sidebar.multiselect(
-    "Consult client", [True, False], default=[True, False],
+    "Consult customer", [True, False], default=[True, False],
     format_func=lambda x: "Yes" if x else "No",
 )
 
@@ -201,7 +201,7 @@ with col1:
 with col2:
     time_series_breakdown = st.radio(
         "Time series breakdown",
-        ["No breakdown (total)", "By subscriber type", "By quiz client", "By consult client"],
+        ["No breakdown (total)", "By subscriber type", "By quiz customer", "By consult customer"],
         key="ts_breakdown",
         horizontal=False,
     )
@@ -223,10 +223,10 @@ with col1:
         elif time_series_breakdown == "By subscriber type":
             breakdown_dim = "subscriber_type"
             breakdown_values = sorted(filtered_df[breakdown_dim].unique())
-        elif time_series_breakdown == "By quiz client":
+        elif time_series_breakdown == "By quiz customer":
             breakdown_dim = "quiz_client"
             breakdown_values = [False, True]
-        else:  # By consult client
+        else:  # By consult customer
             breakdown_dim = "consult_client"
             breakdown_values = [False, True]
 
@@ -364,10 +364,10 @@ st.divider()
 # Breakdown by Quiz / Consult
 col1, col2 = st.columns(2)
 with col1:
-    st.subheader("Breakdown by quiz client status")
+    st.subheader("Breakdown by quiz customer status")
     if len(filtered_df) > 0:
         rows = [
-            ("Quiz client", filtered_df[filtered_df["quiz_client"]]),
+            ("Quiz customer", filtered_df[filtered_df["quiz_client"]]),
             ("Non-quiz", filtered_df[~filtered_df["quiz_client"]]),
         ]
         show_table(breakdown_table(rows))
@@ -375,10 +375,10 @@ with col1:
         st.warning("No data to display")
 
 with col2:
-    st.subheader("Breakdown by consult client status")
+    st.subheader("Breakdown by consult customer status")
     if len(filtered_df) > 0:
         rows = [
-            ("Consult client", filtered_df[filtered_df["consult_client"]]),
+            ("Consult customer", filtered_df[filtered_df["consult_client"]]),
             ("Non-consult", filtered_df[~filtered_df["consult_client"]]),
         ]
         show_table(breakdown_table(rows))
