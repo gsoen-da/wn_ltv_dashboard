@@ -1,10 +1,18 @@
+import os
+
 import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
 
 st.set_page_config(page_title="Customer Segmentation Dashboard", layout="wide")
 
+# Company logo — drop a "logo.png" into the dashboard folder; shows top-left + sidebar.
+LOGO_PATH = "logo.png"
+if os.path.exists(LOGO_PATH):
+    st.logo(LOGO_PATH)
+
 st.title("LTV Dashboard")
+st.caption("Internal use only — confidential")
 
 # ---------------------------------------------------------------------------
 # Data: ROW-LEVEL grain — one row per customer per window (6M / 12M).
@@ -31,6 +39,7 @@ df["cohort_dt"] = pd.to_datetime(df["cohort_month"])
 df = df.sort_values("cohort_dt")
 
 st.sidebar.header("Filters")
+st.sidebar.caption("Internal use only")
 
 # 1) Horizon — pick exactly one (default 12M). Each row belongs to one window,
 #    so this guarantees every count below is a distinct-customer count.
@@ -155,12 +164,15 @@ COL_DP = {"Customers": 0, "LTV": 0, "LTR": 0, "CM3": 0, "CAC": 0,
 
 
 def table_config(frame):
-    """Per-column number formatting so st.dataframe shows the intended decimals."""
+    """Per-column number formatting (decimals) for the interactive grid."""
     return {c: st.column_config.NumberColumn(format=f"%.{d}f")
             for c, d in COL_DP.items() if c in frame.columns}
 
 
 def show_table(frame):
+    """Interactive, sortable table (st.dataframe) with per-column decimals."""
+    if frame is None or len(frame) == 0:
+        return
     st.dataframe(frame, width="stretch", hide_index=True, column_config=table_config(frame))
 
 
