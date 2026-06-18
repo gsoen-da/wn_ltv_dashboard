@@ -34,16 +34,19 @@ horizon = st.sidebar.radio("LTV Horizon", ["12 Months", "6 Months"], index=0)
 horizon_col = "12M" if horizon == "12 Months" else "6M"
 df = df[df[horizon_col]].copy()
 
-# 2) Fiscal Year
+# 2) Fiscal Year — default to the three most recent (e.g. FY24, FY25, FY26)
 fys = sorted(df["fy"].unique())
-selected_fy = st.sidebar.multiselect("Fiscal Year", fys, default=fys[-1:])
+selected_fy = st.sidebar.multiselect("Fiscal Year", fys, default=fys[-3:])
 
-# 3) Cohort Month (cascades from FY)
+# 3) Cohort Month (cascades from FY) — every month of the selected FY(s) is
+#    auto-selected. Keying the widget on the FY selection forces it to
+#    re-initialise (re-select all months) whenever you add/remove a fiscal year.
 available_months = sorted(df[df["fy"].isin(selected_fy)]["cohort_month"].unique())
 selected_months = st.sidebar.multiselect(
     "Cohort Month",
     available_months,
-    default=available_months[-6:] if len(available_months) >= 6 else available_months,
+    default=available_months,
+    key=f"months_{'_'.join(sorted(selected_fy))}",
 )
 
 # 4) Subscriber type
@@ -141,6 +144,7 @@ with col1:
     metric = st.selectbox(
         "Select Metric to Display",
         ["count", "ltv", "ltr", "aov", "ipo", "orders"],
+        index=1,  # default to LTV
         format_func=lambda x: {
             "count": "Customer Count",
             "ltv": "LTV (Lifetime Value)",
