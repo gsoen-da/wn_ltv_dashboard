@@ -12,7 +12,7 @@ if os.path.exists(LOGO_PATH):
     st.logo(LOGO_PATH)
 
 st.title("LTV Dashboard")
-st.caption("Internal use only — confidential")
+st.caption("Internal use only - confidential")
 
 # ---------------------------------------------------------------------------
 # Data: ROW-LEVEL grain — one row per customer per window (6M / 12M).
